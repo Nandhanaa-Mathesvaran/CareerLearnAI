@@ -1,0 +1,128 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: #fafafa;
+  color: #1e1b4b;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f5f3ff;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c4b5fd;
+  border-radius: 99px;
+}
+
+/* ── Glass ──────────────────────────────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.glass-light {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(124, 58, 237, 0.1);
+}
+
+/* ── Gradient text ───────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #a855f7, #ec4899);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-coral {
+  background: linear-gradient(135deg, #f97316, #fbbf24);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Card lift ───────────────────────────────────────── */
+.card-hover {
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 16px 44px rgba(124, 58, 237, 0.16);
+}
+
+/* ── Glow blobs ──────────────────────────────────────── */
+.glow-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ── Progress fill ───────────────────────────────────── */
+.progress-fill {
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Nav active ──────────────────────────────────────── */
+.nav-active {
+  background: rgba(124, 58, 237, 0.1);
+  color: #7c3aed;
+}
+
+/* ── Skill gap card hover ────────────────────────────── */
+.skill-gap-card:hover {
+  border-color: #a855f7;
+  box-shadow: 0 8px 32px rgba(168, 85, 247, 0.18);
+}
+
+/* ── Section card tints ──────────────────────────────── */
+.tint-lavender {
+  background: linear-gradient(145deg, #f5f3ff, #ede9fe);
+}
+
+.tint-peach {
+  background: linear-gradient(145deg, #fff7ed, #fef3c7);
+}
+
+.tint-mint {
+  background: linear-gradient(145deg, #ecfdf5, #d1fae5);
+}
+
+.tint-lemon {
+  background: linear-gradient(145deg, #fefce8, #fef9c3);
+}
+
+/* ── Progress ring ───────────────────────────────────── */
+.ring-track {
+  fill: none;
+  stroke: #e9d5ff;
+  stroke-width: 8;
+}
+
+.ring-fill {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
