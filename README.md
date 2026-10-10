@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CareerLearn AI
 
 An AI-powered learning assistant that identifies your skill gaps for your target career, explains missing concepts, connects them to real-world applications, and gives you practical tasks to learn by doing.
@@ -87,3 +88,6 @@ npm run dev
 - Seamless JSON Payload delivery from FastAPI to React via REST POST `/api/analyze` 
 - Client-side persistence on Learning Tracks (`Not Started -> Learning -> Completed`)
 - Clean UI matching the "Professional modern AI Education platform" specs using pure React + Tailwind.
+=======
+# CareerLearnAI
+>>>>>>> 6b11f675f09d86058b519b6b616578a45cfe347c
