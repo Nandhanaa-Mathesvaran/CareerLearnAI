@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { analyzeSkills } from './api';
+import React, { useState, useEffect, useRef } from 'react';
+import { analyzeSkills, parseResume, recommendCareers } from './api';
 
 // ─── Icons (inline SVG, no extra package needed) ───────────────────────────
 const Icon = ({ name, className = 'w-5 h-5' }) => {
@@ -17,6 +17,8 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
     clock: <><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></>,
     spark: <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />,
     x: <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />,
+    upload: <><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></>,
+    file: <><path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></>,
   };
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -207,12 +209,195 @@ function Landing({ onStart }) {
   );
 }
 
+// ─── RESUME UPLOAD ───────────────────────────────────────────────────────────
+function ResumeUpload({ onSkillsExtracted }) {
+  const [status, setStatus] = useState('idle'); // idle | uploading | done | error
+  const [errorMsg, setErrorMsg] = useState('');
+  const [extracted, setExtracted] = useState(null); // { extractedSkills, sections, summary, filename }
+  const [localSkills, setLocalSkills] = useState([]);
+  const [skillInput, setSkillInput] = useState('');
+  const fileRef = useRef(null);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setStatus('error');
+      setErrorMsg('Only PDF files are accepted.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setStatus('error');
+      setErrorMsg('File is too large (max 5 MB).');
+      return;
+    }
+    setStatus('uploading');
+    setErrorMsg('');
+    setExtracted(null);
+    try {
+      const data = await parseResume(file);
+      setExtracted(data);
+      setLocalSkills(data.extractedSkills || []);
+      setStatus('done');
+    } catch (e) {
+      setStatus('error');
+      setErrorMsg(e.message || 'Failed to parse resume. Is the backend running?');
+    }
+  };
+
+  const onDrop = (e) => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); };
+  const onDragOver = (e) => e.preventDefault();
+
+  const removeSkill = (s) => setLocalSkills(prev => prev.filter(sk => sk !== s));
+  const addSkill = (s) => {
+    const t = s.trim();
+    if (t && !localSkills.includes(t)) setLocalSkills(prev => [...prev, t]);
+    setSkillInput('');
+  };
+
+  const confirm = () => {
+    onSkillsExtracted(localSkills);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Drop zone */}
+      <div
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onClick={() => fileRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center cursor-pointer transition-all ${status === 'uploading' ? 'border-indigo-400 bg-indigo-50/50 animate-pulse' :
+            status === 'done' ? 'border-emerald-400 bg-emerald-50/40' :
+              status === 'error' ? 'border-red-300 bg-red-50/40' :
+                'border-indigo-200 bg-indigo-50/30 hover:border-indigo-400 hover:bg-indigo-50/60'
+          }`}
+      >
+        <input
+          ref={fileRef} type="file" accept=".pdf" className="hidden"
+          onChange={e => { handleFile(e.target.files[0]); e.target.value = ''; }}
+        />
+        {status === 'uploading' ? (
+          <><div className="w-8 h-8 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin mb-3" />
+            <p className="text-indigo-600 font-bold text-sm">Parsing resume…</p></>
+        ) : status === 'done' ? (
+          <><Icon name="check" className="w-8 h-8 text-emerald-500 mb-2" />
+            <p className="text-emerald-700 font-bold text-sm">{extracted?.filename}</p>
+            <p className="text-emerald-600 text-xs mt-1">{localSkills.length} skill{localSkills.length !== 1 ? 's' : ''} detected — click to replace</p></>
+        ) : status === 'error' ? (
+          <><Icon name="x" className="w-8 h-8 text-red-400 mb-2" />
+            <p className="text-red-600 font-bold text-sm text-center">{errorMsg}</p>
+            <p className="text-red-400 text-xs mt-1">Click to try again</p></>
+        ) : (
+          <><Icon name="upload" className="w-8 h-8 text-indigo-400 mb-2" />
+            <p className="text-indigo-600 font-bold text-sm">Drop your resume PDF here</p>
+            <p className="text-slate-400 text-xs mt-1">or click to browse · max 5 MB</p></>
+        )}
+      </div>
+
+      {/* Extracted skills review */}
+      {status === 'done' && (
+        <div className="glass-light border border-emerald-100 rounded-2xl p-5 space-y-4 animate-fade-up">
+          {extracted?.summary && (
+            <div className="text-xs text-slate-500 border-l-2 border-indigo-200 pl-3 leading-relaxed">{extracted.summary}</div>
+          )}
+
+          <div>
+            <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Detected Skills — remove any that are wrong</p>
+            {localSkills.length === 0 ? (
+              <p className="text-slate-400 text-sm">No skills matched. Add them manually below.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {localSkills.map(s => (
+                  <span key={s} className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 py-1.5 rounded-full text-sm font-semibold">
+                    {s}
+                    <button type="button" onClick={() => removeSkill(s)}
+                      className="w-4 h-4 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition">
+                      <Icon name="x" className="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Add missing skill */}
+          <div className="flex gap-2">
+            <input
+              type="text" value={skillInput}
+              onChange={e => setSkillInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSkill(skillInput); } }}
+              placeholder="Add a missing skill…"
+              className="flex-1 rounded-xl border-2 border-slate-200 bg-white p-2.5 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition"
+            />
+            <button type="button" onClick={() => addSkill(skillInput)}
+              className="px-4 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition">Add</button>
+          </div>
+
+          <button type="button" onClick={confirm}
+            className="w-full py-3 bg-brand-gradient text-white font-black rounded-xl hover:shadow-glow-violet transition-all flex items-center justify-center gap-2">
+            <Icon name="check" className="w-4 h-4" /> Use These Skills
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CareerSuggestions({ skills, selectedCareer, onSelectCareer }) {
+  const [recs, setRecs] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const load = async () => {
+    if (!skills.length) return;
+    setStatus('loading');
+    setErrorMsg('');
+    try {
+      const data = await recommendCareers(skills);
+      setRecs(data.recommendations || []);
+      setStatus('done');
+    } catch (e) {
+      setStatus('error');
+      setErrorMsg(e.message || 'Could not load career suggestions.');
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">Career suggestions</label>
+        <button type="button" onClick={load} disabled={status === 'loading'}
+          className="px-3 py-1.5 text-xs font-bold rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 disabled:opacity-60">
+          {status === 'loading' ? 'Matching…' : 'Suggest from my skills'}
+        </button>
+      </div>
+      {status === 'error' && <p className="text-red-600 text-sm">{errorMsg}</p>}
+      {status === 'done' && recs && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500">Similarity is a skill-overlap score, not a hiring probability.</p>
+          {recs.map(r => (
+            <button key={r.career} type="button" onClick={() => onSelectCareer(r.career)}
+              className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${selectedCareer === r.career ? 'border-brandPrimary bg-indigo-50' : 'border-slate-200 bg-white hover:border-indigo-300'}`}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-black text-slate-800">{r.career}</span>
+                <span className="text-xs font-bold text-indigo-600">{Math.round((r.similarityScore || 0) * 100)}% similarity</span>
+              </div>
+              <p className="text-xs text-emerald-700">Matching: {r.matchingSkills.length ? r.matchingSkills.join(', ') : 'none yet'}</p>
+              <p className="text-xs text-slate-500 mt-1">Missing: {r.missingSkills.length ? r.missingSkills.slice(0, 4).join(', ') : 'none'}{r.missingSkills.length > 4 ? '…' : ''}</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PROFILE FORM ────────────────────────────────────────────────────────────
 function ProfileForm({ onAnalyze, initialProfile }) {
   const [career, setCareer] = useState(initialProfile.targetCareer || 'ML Engineer');
   const [level, setLevel] = useState(initialProfile.experienceLevel || 'Beginner');
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState(initialProfile.currentSkills || []);
+  const [inputMode, setInputMode] = useState('manual'); // 'manual' | 'resume'
 
   const CAREERS = ['ML Engineer', 'Data Scientist', 'Data Analyst', 'Software Engineer', 'AI Engineer', 'Full Stack Developer'];
   const SUGGESTED = ['Python', 'SQL', 'JavaScript', 'React', 'Machine Learning', 'Statistics', 'Excel', 'Git'];
@@ -223,6 +408,13 @@ function ProfileForm({ onAnalyze, initialProfile }) {
   };
 
   const onKeyDown = e => { if (e.key === 'Enter') { e.preventDefault(); addSkill(skillInput); } };
+
+  const handleResumeSkills = (extracted) => {
+    // Merge extracted skills with any already added
+    const merged = [...new Set([...skills, ...extracted])];
+    setSkills(merged);
+    setInputMode('manual'); // Switch back so user sees the merged skill list
+  };
 
   return (
     <div className="max-w-2xl mx-auto py-12 px-4">
@@ -263,534 +455,569 @@ function ProfileForm({ onAnalyze, initialProfile }) {
           </div>
         </div>
 
-        {/* Skills */}
+        {/* Skills — tab-switched between Resume and Manual */}
         <div>
-          <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-wider">Your Current Skills</label>
-          <div className="flex gap-2 mb-3">
-            <input
-              type="text" value={skillInput}
-              onChange={e => setSkillInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Type a skill and press Enter…"
-              className="flex-1 rounded-xl border-2 border-slate-200 bg-white p-3.5 text-slate-800 font-medium focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition"
-            />
-            <button type="button" onClick={() => addSkill(skillInput)}
-              className="px-5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition shadow-glow-indigo">Add</button>
-          </div>
-
-          {/* Suggested */}
-          <div className="flex flex-wrap gap-2 mb-4">
-            {SUGGESTED.filter(s => !skills.includes(s)).slice(0, 6).map(s => (
-              <button key={s} type="button" onClick={() => addSkill(s)}
-                className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold border border-indigo-100 hover:bg-indigo-100 transition">+ {s}</button>
-            ))}
-          </div>
-
-          {/* Added chips */}
-          <div className="flex flex-wrap gap-2 min-h-[2rem]">
-            {skills.map(s => (
-              <span key={s} className="flex items-center gap-1.5 bg-indigo-600 text-white px-3.5 py-1.5 rounded-full text-sm font-semibold">
-                {s}
-                <button type="button" onClick={() => setSkills(skills.filter(sk => sk !== s))}
-                  className="w-4 h-4 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition">
-                  <Icon name="x" className="w-2.5 h-2.5" />
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => onAnalyze({ targetCareer: career, experienceLevel: level, currentSkills: skills })}
-          className="w-full py-4 bg-brand-gradient text-white font-black text-lg rounded-2xl hover:shadow-glow-violet transition-all duration-300 flex items-center justify-center gap-2"
-        >
-          Analyze My Skills <Icon name="arrow" className="w-5 h-5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ data, onSelectSkill, progress, onBack, showRoadmap }) {
-  const uniqueGaps = data.skillExplanations.filter((v, i, a) => a.findIndex(t => t.skill === v.skill) === i);
-  const knownSkills = data.knownSkills.filter(s => !uniqueGaps.find(u => u.skill === s));
-
-  const readinessColor = data.readinessEstimate === 'High' ? 'from-emerald-400 to-cyan-500'
-    : data.readinessEstimate === 'Medium' ? 'from-amber-400 to-orange-500' : 'from-red-400 to-rose-500';
-  const readinessPct = data.readinessEstimate === 'High' ? 80 : data.readinessEstimate === 'Medium' ? 50 : 20;
-
-  return (
-    <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
-      {/* Top bar */}
-      <div className="flex flex-wrap justify-between items-center gap-4">
-        <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
-          <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-          Back to Profile
-        </button>
-        <button onClick={showRoadmap}
-          className="flex items-center gap-2 px-5 py-2.5 bg-brand-gradient text-white font-bold rounded-xl shadow-glow-indigo hover:shadow-glow-violet transition-all text-sm">
-          <Icon name="map" className="w-4 h-4" /> View Learning Roadmap
-        </button>
-      </div>
-
-      {/* Hero card */}
-      <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10 shadow-card">
-        <div className="glow-blob w-72 h-72 bg-violet-600 top-[-3rem] right-[-2rem]" />
-        <div className="glow-blob w-56 h-56 bg-cyan-500 bottom-[-2rem] left-[15%]" />
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-8">
-          <div>
-            <p className="text-indigo-300 font-bold uppercase tracking-widest text-xs mb-2">Target Career</p>
-            <h2 className="text-4xl sm:text-5xl font-black mb-4">{data.targetCareer}</h2>
-            <div className="flex flex-wrap gap-3">
-              <Badge variant={data.readinessEstimate === 'High' ? 'green' : data.readinessEstimate === 'Medium' ? 'medium' : 'high'}>
-                {data.readinessEstimate} Readiness
-              </Badge>
-              <span className="text-indigo-200 text-sm font-medium self-center">{data.knownSkills.length} skills known · {data.missingSkills.length} gaps to fill</span>
+          <div className="flex items-center justify-between mb-3">
+            <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider">Your Current Skills</label>
+            <div className="flex rounded-xl border border-indigo-100 overflow-hidden">
+              <button type="button" onClick={() => setInputMode('manual')}
+                className={`px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1 ${inputMode === 'manual' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 hover:bg-indigo-50'
+                  }`}>
+                <Icon name="code" className="w-3.5 h-3.5" /> Manual
+              </button>
+              <button type="button" onClick={() => setInputMode('resume')}
+                className={`px-3 py-1.5 text-xs font-bold transition-all flex items-center gap-1 ${inputMode === 'resume' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 hover:bg-indigo-50'
+                  }`}>
+                <Icon name="upload" className="w-3.5 h-3.5" /> Resume PDF
+              </button>
             </div>
           </div>
-          {/* Readiness Bar */}
-          <div className="sm:min-w-[220px]">
-            <div className="flex justify-between text-sm font-bold mb-2">
-              <span className="text-indigo-200">Skill Readiness</span>
-              <span className="text-white">{readinessPct}%</span>
-            </div>
-            <div className="h-4 bg-white/10 rounded-full overflow-hidden">
-              <div className={`h-full bg-gradient-to-r ${readinessColor} rounded-full progress-fill`} style={{ width: `${readinessPct}%` }} />
-            </div>
-            <p className="text-indigo-300 text-xs mt-2">Based on required skills for {data.targetCareer}</p>
-          </div>
-        </div>
-      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Skill Gaps — wider column */}
-        <div className="lg:col-span-3 space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-3 h-3 rounded-full bg-red-400 shadow shadow-red-200" />
-            <h3 className="text-xl font-black text-slate-900">Skill Gaps ({uniqueGaps.length})</h3>
-            <span className="text-slate-400 text-sm ml-2">Click a skill to explore</span>
-          </div>
-
-          {uniqueGaps.length === 0 ? (
-            <div className="glass-light border border-emerald-200 p-6 rounded-2xl text-center">
-              <Icon name="check" className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
-              <p className="font-bold text-emerald-700">No skill gaps — you're ready for this role!</p>
-            </div>
+          {inputMode === 'resume' ? (
+            <ResumeUpload onSkillsExtracted={handleResumeSkills} />
           ) : (
-            <div className="space-y-3">
-              {uniqueGaps.map((exp, i) => {
-                const st = progress[exp.skill];
-                const priorityVariant = exp.priority === 'HIGH' ? 'high' : exp.priority === 'MEDIUM' ? 'medium' : 'low';
-                return (
-                  <div key={i} onClick={() => onSelectSkill(exp.skill)}
-                    className="skill-gap-card card-hover glass-light border-2 border-indigo-100 p-5 rounded-2xl cursor-pointer group animate-fade-up"
-                    style={{ animationDelay: `${i * 60}ms` }}>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shrink-0">
-                          <Icon name="zap" className="w-5 h-5 text-white" />
-                        </div>
-                        <span className="font-black text-slate-800 text-lg group-hover:text-indigo-600 transition-colors">{exp.skill}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={priorityVariant}>{exp.priority} PRIORITY</Badge>
-                        {st && st !== 'Not Started' && <Badge variant={st === 'Learning' ? 'learning' : 'done'}>{st}</Badge>}
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center gap-2 text-indigo-400 text-sm font-semibold">
-                      <span>Open learning module</span>
-                      <Icon name="arrow" className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+            <>
+              <div className="flex gap-2 mb-3">
+                <input
+                  type="text" value={skillInput}
+                  onChange={e => setSkillInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder="Type a skill and press Enter…"
+                  className="flex-1 rounded-xl border-2 border-slate-200 bg-white p-3.5 text-slate-800 font-medium focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition"
+                />
+                <button type="button" onClick={() => addSkill(skillInput)}
+                  className="px-5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition shadow-glow-indigo">Add</button>
+              </div>
 
-        {/* Known Skills sidebar */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-3 h-3 rounded-full bg-emerald-400 shadow shadow-emerald-200" />
-            <h3 className="text-xl font-black text-slate-900">Known Skills</h3>
-          </div>
-          <div className="glass-light border border-indigo-100 rounded-2xl p-5">
-            {knownSkills.length === 0 ? (
-              <p className="text-slate-400 text-sm text-center py-4">No recognized skills yet — add them in your profile.</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {knownSkills.map(s => (
-                  <span key={s} className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-sm">
-                    <Icon name="check" className="w-3.5 h-3.5" /> {s}
+              {/* Suggested */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {SUGGESTED.filter(s => !skills.includes(s)).slice(0, 6).map(s => (
+                  <button key={s} type="button" onClick={() => addSkill(s)}
+                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold border border-indigo-100 hover:bg-indigo-100 transition">+ {s}</button>
+                ))}
+              </div>
+
+              {/* Added chips */}
+              <div className="flex flex-wrap gap-2 min-h-[2rem]">
+                {skills.map(s => (
+                  <span key={s} className="flex items-center gap-1.5 bg-indigo-600 text-white px-3.5 py-1.5 rounded-full text-sm font-semibold">
+                    {s}
+                    <button type="button" onClick={() => setSkills(skills.filter(sk => sk !== s))}
+                      className="w-4 h-4 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition">
+                      <Icon name="x" className="w-2.5 h-2.5" />
+                    </button>
                   </span>
                 ))}
               </div>
-            )}
-          </div>
-
-          {/* Quick tip card */}
-          <div className="bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl p-6 text-white">
-            <Icon name="brain" className="w-8 h-8 mb-3 opacity-80" />
-            <h4 className="font-black text-lg mb-2">Start Smart</h4>
-            <p className="text-indigo-200 text-sm leading-relaxed">Click the highest-priority gap first. Each module has a hands-on task to make your learning stick.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── SKILL DETAIL ────────────────────────────────────────────────────────────
-function SkillDetail({ skillId, data, onBack, progress, onUpdateProgress }) {
-  if (!data) return (
-    <div className="max-w-2xl mx-auto py-20 text-center">
-      <div className="glass-light border border-red-200 p-10 rounded-3xl">
-        <p className="text-lg font-bold text-slate-600 mb-4">Skill explanation not available.</p>
-        <button onClick={onBack} className="text-indigo-600 font-bold hover:underline">← Go Back</button>
-      </div>
-    </div>
-  );
-
-  const statusBtns = [
-    { key: 'Not Started', icon: '⚪', color: 'bg-slate-800 text-white', inactive: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
-    { key: 'Learning', icon: '⏳', color: 'bg-indigo-600 text-white shadow-glow-indigo', inactive: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200' },
-    { key: 'Completed', icon: '✅', color: 'bg-emerald-600 text-white', inactive: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200' },
-  ];
-
-  return (
-    <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
-      <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
-        <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
-      </button>
-
-      {/* Header card */}
-      <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10">
-        <div className="glow-blob w-64 h-64 bg-violet-600 top-[-2rem] right-[5%]" />
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-6">
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Badge variant="violet">Learning Module</Badge>
-            </div>
-            <h2 className="text-3xl sm:text-5xl font-black mb-2">{skillId}</h2>
-          </div>
-          {/* Progress switcher */}
-          <div className="flex flex-col gap-2 sm:min-w-[200px]">
-            <p className="text-indigo-300 font-bold uppercase tracking-widest text-[11px] mb-1">Your Progress</p>
-            {statusBtns.map(btn => (
-              <button key={btn.key}
-                onClick={() => onUpdateProgress(btn.key)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all ${progress === btn.key ? btn.color : 'glass text-white/70 hover:text-white hover:bg-white/10'}`}>
-                {btn.icon} {btn.key}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Content grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Understand + Connect */}
-        <div className="space-y-6">
-          {/* Understand */}
-          <div className="card-hover glass-light border border-indigo-100 p-7 rounded-3xl shadow-card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center">
-                <Icon name="brain" className="w-5 h-5 text-white" />
-              </div>
-              <h3 className="text-lg font-black text-slate-900">Understand the Concept</h3>
-            </div>
-            <p className="text-slate-600 leading-relaxed text-[15px]">{data.whatIsIt}</p>
-          </div>
-
-          {/* Why */}
-          <div className="card-hover glass-light border border-violet-100 p-7 rounded-3xl shadow-card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-                <Icon name="target" className="w-5 h-5 text-white" />
-              </div>
-              <h3 className="text-lg font-black text-slate-900">Why You Need It</h3>
-            </div>
-            <p className="text-slate-600 leading-relaxed text-[15px]">{data.whyNeeded}</p>
-          </div>
-
-          {/* Career Connection */}
-          <div className="relative overflow-hidden rounded-3xl p-7 bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-glow-indigo">
-            <div className="glow-blob w-48 h-48 bg-cyan-400 bottom-[-2rem] right-[-1rem]" />
-            <div className="relative z-10">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
-                  <Icon name="connect" className="w-5 h-5 text-white" />
-                </div>
-                <h3 className="text-lg font-black">Connect It to Your Career</h3>
-              </div>
-              <p className="text-indigo-100 leading-relaxed text-[15px]">{data.careerConnection}</p>
-            </div>
-          </div>
+            </>
+          )}
         </div>
 
-        {/* Right: Apply (task card) */}
-        {data.applicationTask && (
-          <div className="glass-light border border-indigo-100 p-7 rounded-3xl shadow-card space-y-5">
-            <div className="flex items-center gap-3 mb-1">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-indigo-500 flex items-center justify-center">
-                <Icon name="code" className="w-5 h-5 text-white" />
-              </div>
-              <h3 className="text-lg font-black text-slate-900">Apply It in Practice</h3>
-            </div>
-
-            {/* Task header */}
-            <div className="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-5">
-              <h4 className="font-black text-indigo-800 text-xl mb-3 leading-snug">{data.applicationTask.title}</h4>
-              <div className="flex flex-wrap gap-2">
-                <span className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold ${data.applicationTask.difficulty === 'Beginner' ? 'bg-emerald-100 text-emerald-700' : data.applicationTask.difficulty === 'Advanced' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                  <Icon name="spark" className="w-3 h-3" /> {data.applicationTask.difficulty}
-                </span>
-                <span className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-indigo-100 text-indigo-700">
-                  <Icon name="clock" className="w-3 h-3" /> {data.applicationTask.estimatedTime}
-                </span>
-              </div>
-            </div>
-
-            {/* Objective */}
-            <div>
-              <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Objective</p>
-              <p className="text-slate-700 font-medium text-[15px] leading-relaxed">{data.applicationTask.objective}</p>
-            </div>
-
-            {/* Steps */}
-            <div>
-              <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Execution Steps</p>
-              <ol className="space-y-3">
-                {data.applicationTask.steps.map((st, i) => (
-                  <li key={i} className="flex gap-3 items-start">
-                    <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
-                    <span className="text-slate-700 text-[14.5px] leading-relaxed">{st}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            {/* Output */}
-            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-              <p className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-1.5">Expected Output</p>
-              <p className="text-emerald-800 font-semibold text-sm">{data.applicationTask.expectedOutput}</p>
-            </div>
-
-            {/* Hint */}
-            {data.applicationTask.hint && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3">
-                <span className="text-xl shrink-0">💡</span>
-                <p className="text-amber-800 text-sm font-medium"><strong>Hint:</strong> {data.applicationTask.hint}</p>
-              </div>
-            )}
-          </div>
+        {skills.length > 0 && (
+          <CareerSuggestions skills={skills} selectedCareer={career} onSelectCareer={setCareer} />
         )}
-      </div>
-    </div>
-  );
-}
 
-// ─── ROADMAP ─────────────────────────────────────────────────────────────────
-function Roadmap({ data, progress, onBack }) {
-  const uniqueRoadmap = (data.roadmap || []).filter((v, i, a) => a.indexOf(v) === i);
-
-  return (
-    <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
-      <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
-        <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
-      </button>
-
-      {/* Header */}
-      <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10 text-center">
-        <div className="glow-blob w-64 h-64 bg-violet-600 top-[-2rem] left-[15%]" />
-        <div className="glow-blob w-48 h-48 bg-cyan-500 bottom-[-1rem] right-[15%]" />
-        <div className="relative z-10">
-          <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-2 text-sm font-bold text-violet-200 mb-4">
-            <Icon name="map" className="w-4 h-4" /> Learning Path
-          </div>
-          <h2 className="text-4xl sm:text-5xl font-black mb-3">Structured Learning Roadmap</h2>
-          <p className="text-indigo-200 max-w-xl mx-auto text-lg">
-            Follow this prerequisite-based sequence to master <strong className="text-white">{data.targetCareer}</strong>.
-          </p>
-        </div>
-      </div>
-
-      {/* Steps */}
-      <div className="relative">
-        {/* Vertical line */}
-        <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-500 via-violet-400 to-slate-200 lg:left-1/2" />
-
-        <div className="space-y-6">
-          {uniqueRoadmap.map((skill, index) => {
-            const status = progress[skill] || 'Not Started';
-            const isMissing = data.missingSkills.includes(skill);
-            const isActive = status === 'Learning';
-            const isDone = status === 'Completed';
-
-            const dotCls = isDone ? 'bg-emerald-500 border-emerald-200' : isActive ? 'bg-indigo-500 border-indigo-200 ring-4 ring-indigo-100' : 'bg-slate-300 border-slate-100';
-            const cardCls = isDone ? 'border-emerald-300 bg-emerald-50/50' : isActive ? 'border-indigo-400 shadow-glow-indigo bg-indigo-50/50' : 'border-slate-200 bg-white hover:border-indigo-200';
-
-            return (
-              <div key={skill} className={`relative flex gap-6 items-start transition-all duration-500 animate-fade-up`} style={{ animationDelay: `${index * 60}ms` }}>
-                {/* Number dot */}
-                <div className={`shrink-0 w-12 h-12 rounded-full border-4 ${dotCls} flex items-center justify-center shadow-md z-10 mt-1`}>
-                  {isDone
-                    ? <Icon name="check" className="w-5 h-5 text-white" />
-                    : <span className="text-white font-black text-sm">{index + 1}</span>
-                  }
-                </div>
-
-                {/* Card */}
-                <div className={`flex-1 border-2 ${cardCls} p-6 rounded-2xl transition-all duration-300 card-hover`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                    <h3 className="font-black text-slate-900 text-xl">{skill}</h3>
-                    <div className="flex items-center gap-2">
-                      {isDone && <Badge variant="done">✓ Completed</Badge>}
-                      {isActive && <Badge variant="learning">⏳ Active</Badge>}
-                      {!isDone && !isActive && <Badge variant="default">Pending</Badge>}
-                      {!isMissing && <Badge variant="green">Known</Badge>}
-                    </div>
-                  </div>
-                  <p className="text-slate-500 text-sm mb-4">
-                    {isMissing ? 'Priority gap — work through the learning module to build this skill.' : 'You have foundational experience. Revisiting will strengthen your understanding.'}
-                  </p>
-                  {/* Progress bar */}
-                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full progress-fill ${isDone ? 'w-full bg-emerald-500' : isActive ? 'w-1/2 bg-gradient-to-r from-indigo-500 to-violet-500' : 'w-0'}`} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── ROOT APP ────────────────────────────────────────────────────────────────
-export default function App() {
-  const [currentView, setCurrentView] = useState('landing');
-  const [profile, setProfile] = useState({ targetCareer: 'ML Engineer', experienceLevel: 'Beginner', currentSkills: [] });
-  const [analysisData, setAnalysisData] = useState(null);
-  const [selectedSkill, setSelectedSkill] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const getInitialProgress = () => {
-    try { return JSON.parse(localStorage.getItem('learningProgress') || '{}'); }
-    catch { return {}; }
-  };
-  const [progress, setProgress] = useState(getInitialProgress);
-
-  useEffect(() => {
-    localStorage.setItem('learningProgress', JSON.stringify(progress));
-  }, [progress]);
-
-  const updateProgress = (skill, status) =>
-    setProgress(prev => ({ ...prev, [skill]: status }));
-
-  const handleAnalyze = async (data) => {
-    setProfile(data);
-    setLoading(true);
-    try {
-      const result = await analyzeSkills(data.targetCareer, data.currentSkills, data.experienceLevel);
-      setAnalysisData({ ...result, targetCareer: data.targetCareer });
-      setCurrentView('dashboard');
-    } catch (e) {
-      console.error(e);
-      alert('Failed to analyze skills. Is the backend running?');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const navItems = analysisData ? [
-    { key: 'profile', label: 'Profile' },
-    { key: 'dashboard', label: 'Dashboard' },
-    { key: 'roadmap', label: '🗺️ Roadmap' },
-  ] : [];
-
-  return (
-    <div className="min-h-screen bg-surfaceAlt font-sans">
-      {/* Navbar */}
-      <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-indigo-100 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <button onClick={() => setCurrentView('landing')} className="flex items-center gap-2.5 group">
-            <div className="w-9 h-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-glow-indigo group-hover:shadow-glow-violet transition-all">
-              <span className="text-white font-black text-lg">C</span>
-            </div>
-            <span className="hidden sm:block font-black text-slate-900 text-lg tracking-tight">
-              CareerLearn <span className="text-indigo-400 font-medium">AI</span>
-            </span>
+          <button
+            type="button"
+            onClick={() => onAnalyze({ targetCareer: career, experienceLevel: level, currentSkills: skills })}
+            className="w-full py-4 bg-brand-gradient text-white font-black text-lg rounded-2xl hover:shadow-glow-violet transition-all duration-300 flex items-center justify-center gap-2"
+          >
+            Analyze My Skills <Icon name="arrow" className="w-5 h-5" />
           </button>
+        </div>
+      </div>
+      );
+}
 
-          {navItems.length > 0 && (
-            <div className="flex items-center gap-1">
-              {navItems.map(n => (
-                <button key={n.key} onClick={() => setCurrentView(n.key)}
-                  className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${currentView === n.key ? 'nav-active' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}`}>
-                  {n.label}
+      // ─── DASHBOARD ───────────────────────────────────────────────────────────────
+      function Dashboard({data, onSelectSkill, progress, onBack, showRoadmap}) {
+  const uniqueGaps = data.skillExplanations.filter((v, i, a) => a.findIndex(t => t.skill === v.skill) === i);
+  const knownSkills = data.knownSkills.filter(s => !uniqueGaps.find(u => u.skill === s));
+
+      const readinessColor = data.readinessEstimate === 'High' ? 'from-emerald-400 to-cyan-500'
+      : data.readinessEstimate === 'Medium' ? 'from-amber-400 to-orange-500' : 'from-red-400 to-rose-500';
+      // Use the real numeric percentage returned by the backend (fallback to estimate-based value).
+      const readinessPct = typeof data.readinessPct === 'number'
+      ? data.readinessPct
+      : (data.readinessEstimate === 'High' ? 80 : data.readinessEstimate === 'Medium' ? 50 : 20);
+
+      return (
+      <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
+        {/* Top bar */}
+        <div className="flex flex-wrap justify-between items-center gap-4">
+          <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
+            <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
+            Back to Profile
+          </button>
+          <button onClick={showRoadmap}
+            className="flex items-center gap-2 px-5 py-2.5 bg-brand-gradient text-white font-bold rounded-xl shadow-glow-indigo hover:shadow-glow-violet transition-all text-sm">
+            <Icon name="map" className="w-4 h-4" /> View Learning Roadmap
+          </button>
+        </div>
+
+        {/* Hero card */}
+        <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10 shadow-card">
+          <div className="glow-blob w-72 h-72 bg-violet-600 top-[-3rem] right-[-2rem]" />
+          <div className="glow-blob w-56 h-56 bg-cyan-500 bottom-[-2rem] left-[15%]" />
+          <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-8">
+            <div>
+              <p className="text-indigo-300 font-bold uppercase tracking-widest text-xs mb-2">Target Career</p>
+              <h2 className="text-4xl sm:text-5xl font-black mb-4">{data.targetCareer}</h2>
+              <div className="flex flex-wrap gap-3">
+                <Badge variant={data.readinessEstimate === 'High' ? 'green' : data.readinessEstimate === 'Medium' ? 'medium' : 'high'}>
+                  {data.readinessEstimate} Readiness
+                </Badge>
+                <span className="text-indigo-200 text-sm font-medium self-center">{data.knownSkills.length} skills known · {data.missingSkills.length} gaps to fill</span>
+              </div>
+            </div>
+            {/* Readiness Bar */}
+            <div className="sm:min-w-[220px]">
+              <div className="flex justify-between text-sm font-bold mb-2">
+                <span className="text-indigo-200">Skill Readiness</span>
+                <span className="text-white">{readinessPct}%</span>
+              </div>
+              <div className="h-4 bg-white/10 rounded-full overflow-hidden">
+                <div className={`h-full bg-gradient-to-r ${readinessColor} rounded-full progress-fill`} style={{ width: `${readinessPct}%` }} />
+              </div>
+              <p className="text-indigo-300 text-xs mt-2">Based on required skills for {data.targetCareer}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Skill Gaps — wider column */}
+          <div className="lg:col-span-3 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-3 h-3 rounded-full bg-red-400 shadow shadow-red-200" />
+              <h3 className="text-xl font-black text-slate-900">Skill Gaps ({uniqueGaps.length})</h3>
+              <span className="text-slate-400 text-sm ml-2">Click a skill to explore</span>
+            </div>
+
+            {uniqueGaps.length === 0 ? (
+              <div className="glass-light border border-emerald-200 p-6 rounded-2xl text-center">
+                <Icon name="check" className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
+                <p className="font-bold text-emerald-700">No skill gaps — you're ready for this role!</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {uniqueGaps.map((exp, i) => {
+                  const st = progress[exp.skill];
+                  const priorityVariant = exp.priority === 'HIGH' ? 'high' : exp.priority === 'MEDIUM' ? 'medium' : 'low';
+                  return (
+                    <div key={i} onClick={() => onSelectSkill(exp.skill)}
+                      className="skill-gap-card card-hover glass-light border-2 border-indigo-100 p-5 rounded-2xl cursor-pointer group animate-fade-up"
+                      style={{ animationDelay: `${i * 60}ms` }}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shrink-0">
+                            <Icon name="zap" className="w-5 h-5 text-white" />
+                          </div>
+                          <span className="font-black text-slate-800 text-lg group-hover:text-indigo-600 transition-colors">{exp.skill}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={priorityVariant}>{exp.priority} PRIORITY</Badge>
+                          {st && st !== 'Not Started' && <Badge variant={st === 'Learning' ? 'learning' : 'done'}>{st}</Badge>}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center gap-2 text-indigo-400 text-sm font-semibold">
+                        <span>Open learning module</span>
+                        <Icon name="arrow" className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Known Skills sidebar */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-3 h-3 rounded-full bg-emerald-400 shadow shadow-emerald-200" />
+              <h3 className="text-xl font-black text-slate-900">Known Skills</h3>
+            </div>
+            <div className="glass-light border border-indigo-100 rounded-2xl p-5">
+              {knownSkills.length === 0 ? (
+                <p className="text-slate-400 text-sm text-center py-4">No recognized skills yet — add them in your profile.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {knownSkills.map(s => (
+                    <span key={s} className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl font-bold text-sm">
+                      <Icon name="check" className="w-3.5 h-3.5" /> {s}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quick tip card */}
+            <div className="bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl p-6 text-white">
+              <Icon name="brain" className="w-8 h-8 mb-3 opacity-80" />
+              <h4 className="font-black text-lg mb-2">Start Smart</h4>
+              <p className="text-indigo-200 text-sm leading-relaxed">Click the highest-priority gap first. Each module has a hands-on task to make your learning stick.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      );
+}
+
+      // ─── SKILL DETAIL ────────────────────────────────────────────────────────────
+      function SkillDetail({skillId, data, onBack, progress, onUpdateProgress}) {
+  if (!data) return (
+      <div className="max-w-2xl mx-auto py-20 text-center">
+        <div className="glass-light border border-red-200 p-10 rounded-3xl">
+          <p className="text-lg font-bold text-slate-600 mb-4">Skill explanation not available.</p>
+          <button onClick={onBack} className="text-indigo-600 font-bold hover:underline">← Go Back</button>
+        </div>
+      </div>
+      );
+
+      const statusBtns = [
+      {key: 'Not Started', icon: '⚪', color: 'bg-slate-800 text-white', inactive: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
+      {key: 'Learning', icon: '⏳', color: 'bg-indigo-600 text-white shadow-glow-indigo', inactive: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200' },
+      {key: 'Completed', icon: '✅', color: 'bg-emerald-600 text-white', inactive: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200' },
+      ];
+
+      return (
+      <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
+        <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
+          <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
+        </button>
+
+        {/* Header card */}
+        <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10">
+          <div className="glow-blob w-64 h-64 bg-violet-600 top-[-2rem] right-[5%]" />
+          <div className="relative z-10 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-6">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Badge variant="violet">Learning Module</Badge>
+                {data.experienceLevel && (
+                  <Badge variant="default">{data.experienceLevel}</Badge>
+                )}
+              </div>
+              <h2 className="text-3xl sm:text-5xl font-black mb-2">{skillId}</h2>
+            </div>
+            {/* Progress switcher */}
+            <div className="flex flex-col gap-2 sm:min-w-[200px]">
+              <p className="text-indigo-300 font-bold uppercase tracking-widest text-[11px] mb-1">Your Progress</p>
+              {statusBtns.map(btn => (
+                <button key={btn.key}
+                  onClick={() => onUpdateProgress(btn.key)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all ${progress === btn.key ? btn.color : 'glass text-white/70 hover:text-white hover:bg-white/10'}`}>
+                  {btn.icon} {btn.key}
                 </button>
               ))}
-              <button onClick={() => setCurrentView('profile')}
-                className="ml-2 px-5 py-2 bg-brand-gradient text-white font-bold text-sm rounded-xl shadow-glow-indigo hover:shadow-glow-violet transition-all">
-                New Analysis
-              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Content grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Understand + Connect */}
+          <div className="space-y-6">
+            {/* Understand */}
+            <div className="card-hover glass-light border border-indigo-100 p-7 rounded-3xl shadow-card">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center">
+                  <Icon name="brain" className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Understand the Concept</h3>
+              </div>
+              <p className="text-slate-600 leading-relaxed text-[15px]">{data.whatIsIt}</p>
+            </div>
+
+            {/* Why */}
+            <div className="card-hover glass-light border border-violet-100 p-7 rounded-3xl shadow-card">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                  <Icon name="target" className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Why You Need It</h3>
+              </div>
+              <p className="text-slate-600 leading-relaxed text-[15px]">{data.whyNeeded}</p>
+            </div>
+
+            {/* Career Connection */}
+            <div className="relative overflow-hidden rounded-3xl p-7 bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-glow-indigo">
+              <div className="glow-blob w-48 h-48 bg-cyan-400 bottom-[-2rem] right-[-1rem]" />
+              <div className="relative z-10">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+                    <Icon name="connect" className="w-5 h-5 text-white" />
+                  </div>
+                  <h3 className="text-lg font-black">Connect It to Your Career</h3>
+                </div>
+                <p className="text-indigo-100 leading-relaxed text-[15px]">{data.careerConnection}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Apply (task card) */}
+          {data.applicationTask && (
+            <div className="glass-light border border-indigo-100 p-7 rounded-3xl shadow-card space-y-5">
+              <div className="flex items-center gap-3 mb-1">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-indigo-500 flex items-center justify-center">
+                  <Icon name="code" className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Apply It in Practice</h3>
+              </div>
+
+              {/* Task header */}
+              <div className="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-5">
+                <h4 className="font-black text-indigo-800 text-xl mb-3 leading-snug">{data.applicationTask.title}</h4>
+                <div className="flex flex-wrap gap-2">
+                  <span className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold ${data.applicationTask.difficulty === 'Beginner' ? 'bg-emerald-100 text-emerald-700' : data.applicationTask.difficulty === 'Advanced' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <Icon name="spark" className="w-3 h-3" /> {data.applicationTask.difficulty}
+                  </span>
+                  <span className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-indigo-100 text-indigo-700">
+                    <Icon name="clock" className="w-3 h-3" /> {data.applicationTask.estimatedTime}
+                  </span>
+                </div>
+              </div>
+
+              {/* Objective */}
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Objective</p>
+                <p className="text-slate-700 font-medium text-[15px] leading-relaxed">{data.applicationTask.objective}</p>
+              </div>
+
+              {/* Steps */}
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Execution Steps</p>
+                <ol className="space-y-3">
+                  {data.applicationTask.steps.map((st, i) => (
+                    <li key={i} className="flex gap-3 items-start">
+                      <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                      <span className="text-slate-700 text-[14.5px] leading-relaxed">{st}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              {/* Output */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                <p className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-1.5">Expected Output</p>
+                <p className="text-emerald-800 font-semibold text-sm">{data.applicationTask.expectedOutput}</p>
+              </div>
+
+              {/* Hint */}
+              {data.applicationTask.hint && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3">
+                  <span className="text-xl shrink-0">💡</span>
+                  <p className="text-amber-800 text-sm font-medium"><strong>Hint:</strong> {data.applicationTask.hint}</p>
+                </div>
+              )}
             </div>
           )}
         </div>
-      </nav>
+      </div>
+      );
+}
 
-      {/* Loading overlay */}
-      {loading && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl p-10 shadow-2xl flex flex-col items-center gap-5">
-            <div className="relative w-16 h-16">
-              <div className="absolute inset-0 rounded-full border-4 border-indigo-100" />
-              <div className="absolute inset-0 rounded-full border-4 border-t-indigo-600 animate-spin" />
+      // ─── ROADMAP ─────────────────────────────────────────────────────────────────
+      function Roadmap({data, progress, onBack}) {
+  const uniqueRoadmap = (data.roadmap || []).filter((v, i, a) => a.indexOf(v) === i);
+
+      return (
+      <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
+        <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-semibold transition-colors group">
+          <Icon name="arrowLeft" className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
+        </button>
+
+        {/* Header */}
+        <div className="relative overflow-hidden bg-hero-gradient text-white rounded-3xl p-8 sm:p-10 text-center">
+          <div className="glow-blob w-64 h-64 bg-violet-600 top-[-2rem] left-[15%]" />
+          <div className="glow-blob w-48 h-48 bg-cyan-500 bottom-[-1rem] right-[15%]" />
+          <div className="relative z-10">
+            <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-2 text-sm font-bold text-violet-200 mb-4">
+              <Icon name="map" className="w-4 h-4" /> Learning Path
             </div>
-            <div className="text-center">
-              <p className="font-black text-slate-900 text-lg">Analyzing your skills…</p>
-              <p className="text-slate-400 text-sm mt-1">AI is mapping your learning path</p>
-            </div>
+            <h2 className="text-4xl sm:text-5xl font-black mb-3">Structured Learning Roadmap</h2>
+            <p className="text-indigo-200 max-w-xl mx-auto text-lg">
+              Follow this prerequisite-based sequence to master <strong className="text-white">{data.targetCareer}</strong>.
+            </p>
           </div>
         </div>
-      )}
 
-      <main>
-        {currentView === 'landing' && <Landing onStart={() => setCurrentView('profile')} />}
-        {currentView === 'profile' && <ProfileForm initialProfile={profile} onAnalyze={handleAnalyze} />}
-        {currentView === 'dashboard' && analysisData && (
-          <Dashboard
-            data={analysisData}
-            onSelectSkill={skill => { setSelectedSkill(skill); setCurrentView('skillDetail'); }}
-            progress={progress}
-            onBack={() => setCurrentView('profile')}
-            showRoadmap={() => setCurrentView('roadmap')}
-          />
-        )}
-        {currentView === 'skillDetail' && selectedSkill && (
-          <SkillDetail
-            skillId={selectedSkill}
-            data={analysisData.skillExplanations.find(s => s.skill === selectedSkill) || { whatIsIt: 'Content coming soon.', whyNeeded: 'Content coming soon.', careerConnection: 'Content coming soon.', applicationTask: null }}
-            onBack={() => setCurrentView('dashboard')}
-            progress={progress[selectedSkill] || 'Not Started'}
-            onUpdateProgress={status => updateProgress(selectedSkill, status)}
-          />
-        )}
-        {currentView === 'roadmap' && analysisData && (
-          <Roadmap data={analysisData} progress={progress} onBack={() => setCurrentView('dashboard')} />
-        )}
-      </main>
+        {/* Steps */}
+        <div className="relative">
+          {/* Vertical line */}
+          <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-500 via-violet-400 to-slate-200 lg:left-1/2" />
 
-      {/* Footer */}
-      {currentView === 'landing' && (
-        <footer className="bg-hero-gradient text-indigo-300 text-center py-8 text-sm">
-          <p className="font-semibold">CareerLearn AI · Built for ForgeHacks 2026 · AI + Education Track</p>
-        </footer>
-      )}
-    </div>
-  );
+          <div className="space-y-6">
+            {uniqueRoadmap.map((skill, index) => {
+              const status = progress[skill] || 'Not Started';
+              const isMissing = data.missingSkills.includes(skill);
+              const isActive = status === 'Learning';
+              const isDone = status === 'Completed';
+
+              const dotCls = isDone ? 'bg-emerald-500 border-emerald-200' : isActive ? 'bg-indigo-500 border-indigo-200 ring-4 ring-indigo-100' : 'bg-slate-300 border-slate-100';
+              const cardCls = isDone ? 'border-emerald-300 bg-emerald-50/50' : isActive ? 'border-indigo-400 shadow-glow-indigo bg-indigo-50/50' : 'border-slate-200 bg-white hover:border-indigo-200';
+
+              return (
+                <div key={skill} className={`relative flex gap-6 items-start transition-all duration-500 animate-fade-up`} style={{ animationDelay: `${index * 60}ms` }}>
+                  {/* Number dot */}
+                  <div className={`shrink-0 w-12 h-12 rounded-full border-4 ${dotCls} flex items-center justify-center shadow-md z-10 mt-1`}>
+                    {isDone
+                      ? <Icon name="check" className="w-5 h-5 text-white" />
+                      : <span className="text-white font-black text-sm">{index + 1}</span>
+                    }
+                  </div>
+
+                  {/* Card */}
+                  <div className={`flex-1 border-2 ${cardCls} p-6 rounded-2xl transition-all duration-300 card-hover`}>
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                      <h3 className="font-black text-slate-900 text-xl">{skill}</h3>
+                      <div className="flex items-center gap-2">
+                        {isDone && <Badge variant="done">✓ Completed</Badge>}
+                        {isActive && <Badge variant="learning">⏳ Active</Badge>}
+                        {!isDone && !isActive && <Badge variant="default">Pending</Badge>}
+                        {!isMissing && <Badge variant="green">Known</Badge>}
+                      </div>
+                    </div>
+                    <p className="text-slate-500 text-sm mb-4">
+                      {isMissing ? 'Priority gap — work through the learning module to build this skill.' : 'You have foundational experience. Revisiting will strengthen your understanding.'}
+                    </p>
+                    {/* Progress bar */}
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full progress-fill ${isDone ? 'w-full bg-emerald-500' : isActive ? 'w-1/2 bg-gradient-to-r from-indigo-500 to-violet-500' : 'w-0'}`} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      );
+}
+
+      // ─── ROOT APP ────────────────────────────────────────────────────────────────
+      export default function App() {
+  const [currentView, setCurrentView] = useState('landing');
+      const [profile, setProfile] = useState({targetCareer: 'ML Engineer', experienceLevel: 'Beginner', currentSkills: [] });
+      const [analysisData, setAnalysisData] = useState(null);
+      const [selectedSkill, setSelectedSkill] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+  const getInitialProgress = () => {
+    try { return JSON.parse(localStorage.getItem('learningProgress') || '{ }'); }
+      catch { return { }; }
+  };
+      const [progress, setProgress] = useState(getInitialProgress);
+
+  useEffect(() => {
+        localStorage.setItem('learningProgress', JSON.stringify(progress));
+  }, [progress]);
+
+  const updateProgress = (skill, status) =>
+    setProgress(prev => ({...prev, [skill]: status }));
+
+  const handleAnalyze = async (data) => {
+        setProfile(data);
+      setLoading(true);
+      try {
+      const result = await analyzeSkills(data.targetCareer, data.currentSkills, data.experienceLevel);
+      setAnalysisData({...result, targetCareer: data.targetCareer });
+      setCurrentView('dashboard');
+    } catch (e) {
+        console.error(e);
+      // Surface structured backend errors (e.g. unsupported career)
+      const msg = e?.detail?.error
+      ? `${e.detail.error}\nSupported: ${(e.detail.supported_careers || []).join(', ')}`
+      : 'Failed to analyze skills. Is the backend running?';
+      alert(msg);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+      const navItems = analysisData ? [
+      {key: 'profile', label: 'Profile' },
+      {key: 'dashboard', label: 'Dashboard' },
+      {key: 'roadmap', label: '🗺️ Roadmap' },
+      ] : [];
+
+      return (
+      <div className="min-h-screen bg-surfaceAlt font-sans">
+        {/* Navbar */}
+        <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-indigo-100 shadow-sm">
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+            <button onClick={() => setCurrentView('landing')} className="flex items-center gap-2.5 group">
+              <div className="w-9 h-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-glow-indigo group-hover:shadow-glow-violet transition-all">
+                <span className="text-white font-black text-lg">C</span>
+              </div>
+              <span className="hidden sm:block font-black text-slate-900 text-lg tracking-tight">
+                CareerLearn <span className="text-indigo-400 font-medium">AI</span>
+              </span>
+            </button>
+
+            {navItems.length > 0 && (
+              <div className="flex items-center gap-1">
+                {navItems.map(n => (
+                  <button key={n.key} onClick={() => setCurrentView(n.key)}
+                    className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${currentView === n.key ? 'nav-active' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}`}>
+                    {n.label}
+                  </button>
+                ))}
+                <button onClick={() => setCurrentView('profile')}
+                  className="ml-2 px-5 py-2 bg-brand-gradient text-white font-bold text-sm rounded-xl shadow-glow-indigo hover:shadow-glow-violet transition-all">
+                  New Analysis
+                </button>
+              </div>
+            )}
+          </div>
+        </nav>
+
+        {/* Loading overlay */}
+        {loading && (
+          <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl p-10 shadow-2xl flex flex-col items-center gap-5">
+              <div className="relative w-16 h-16">
+                <div className="absolute inset-0 rounded-full border-4 border-indigo-100" />
+                <div className="absolute inset-0 rounded-full border-4 border-t-indigo-600 animate-spin" />
+              </div>
+              <div className="text-center">
+                <p className="font-black text-slate-900 text-lg">Analyzing your skills…</p>
+                <p className="text-slate-400 text-sm mt-1">AI is mapping your learning path</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <main>
+          {currentView === 'landing' && <Landing onStart={() => setCurrentView('profile')} />}
+          {currentView === 'profile' && <ProfileForm initialProfile={profile} onAnalyze={handleAnalyze} />}
+          {currentView === 'dashboard' && analysisData && (
+            <Dashboard
+              data={analysisData}
+              onSelectSkill={skill => { setSelectedSkill(skill); setCurrentView('skillDetail'); }}
+              progress={progress}
+              onBack={() => setCurrentView('profile')}
+              showRoadmap={() => setCurrentView('roadmap')}
+            />
+          )}
+          {currentView === 'skillDetail' && selectedSkill && (
+            <SkillDetail
+              skillId={selectedSkill}
+              data={analysisData.skillExplanations.find(s => s.skill === selectedSkill) || { whatIsIt: 'Content coming soon.', whyNeeded: 'Content coming soon.', careerConnection: 'Content coming soon.', applicationTask: null }}
+              onBack={() => setCurrentView('dashboard')}
+              progress={progress[selectedSkill] || 'Not Started'}
+              onUpdateProgress={status => updateProgress(selectedSkill, status)}
+            />
+          )}
+          {currentView === 'roadmap' && analysisData && (
+            <Roadmap data={analysisData} progress={progress} onBack={() => setCurrentView('dashboard')} />
+          )}
+        </main>
+
+        {/* Footer */}
+        {currentView === 'landing' && (
+          <footer className="bg-hero-gradient text-indigo-300 text-center py-8 text-sm">
+            <p className="font-semibold">CareerLearn AI · Built for ForgeHacks 2026 · AI + Education Track</p>
+          </footer>
+        )}
+      </div>
+      );
 }
